@@ -1,143 +1,179 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="FinanceOps - Delta.ai Edition", layout="wide")
+st.set_page_config(page_title="FinanceOps - MVP Delta.ai", layout="wide")
 
-# =========================
-# HELPERS & FORMATAÇÃO
-# =========================
+# ==========================================
+# 1. HELPERS E FORMATAÇÃO
+# ==========================================
 def brl(x: float) -> str:
-    s = f"{x:,.2f}"
-    return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def pct(x: float) -> str:
-    return f"{x:.1f}%"
+    return f"{x:.2f}%"
 
-# =========================
-# ENGINE DE PRECIFICAÇÃO (Baseado nos CSVs fornecidos)
-# =========================
-def engine_precificacao_delta(fixas, pessoas, horas_nominais, margem_alvo, impostos=10.0, comissao=5.0):
-    """
-    Refaz a lógica conforme 'ROTEIRO PARA FORMAÇÃO DE PREÇOS.csv'
-    e 'ÍNDICE COMERCIALIZAÇÃO E MARK U.csv'
-    """
-    # 2º Passo: Capacidade Produtiva (Produtividade de 85% conforme planilha)
-    capacidade_real = (pessoas * horas_nominais) * 0.85
-    
-    # 3º Passo: Custo Hora
-    custo_hora = fixas / capacidade_real if capacidade_real > 0 else 0
-    
-    # 6º Passo: Mark Up Multiplicador (Evita o erro de margem sobre custo)
-    taxas_incidencia = impostos + comissao + margem_alvo
-    if taxas_incidencia >= 100:
-        markup = 10.0 # Trava de segurança
-    else:
-        markup = 100 / (100 - taxas_incidencia)
-    
-    # Preço Sugerido por Hora (Preço de Venda = Custo Direto * Markup)
-    preco_venda_hora = custo_hora * markup
-    
-    return {
-        "custo_hora": custo_hora,
-        "markup": markup,
-        "preco_venda_hora": preco_venda_hora,
-        "capacidade_real": capacidade_real
-    }
+# ==========================================
+# 2. CORE FINANCEIRO (LÓGICA DAS PLANILHAS)
+# ==========================================
 
-# =========================
-# INTERFACE PRINCIPAL
-# =========================
-st.title("🚀 FinanceOps — MVP Delta.ai")
+def calcular_markup_multiplicador(impostos, comissao, margem_lucro):
+    """Lógica da aba 'ÍNDICE COMERCIALIZAÇÃO E MARK U'"""
+    soma_taxas = impostos + comissao + margem_lucro
+    if soma_taxas >= 100: return 10.0  # Limite de segurança
+    return 100 / (100 - soma_taxas)
+
+def calcular_venda_prazo(valor_avista, parcelas, taxa_juros=0.0123):
+    """Lógica da aba 'CÁLCULO PREÇO À PRAZO'"""
+    if parcelas <= 1: return valor_avista
+    # Fórmula de coeficiente de financiamento (Price)
+    coeficiente = (taxa_juros * (1 + taxa_juros)**parcelas) / ((1 + taxa_juros)**parcelas - 1)
+    valor_parcela = valor_avista * coeficiente
+    return valor_parcela * parcelas
+
+# ==========================================
+# 3. INTERFACE E INPUTS (SIDEBAR)
+# ==========================================
+st.title("🚀 FinanceOps MVP — Sistema de Gestão Delta.ai")
 st.markdown("---")
 
-# Sidebar: Configurações de Custos Reais (Inputs das Planilhas)
-st.sidebar.header("📋 Dados da Operação")
-custos_fixos_mensais = st.sidebar.number_input("Despesas Fixas Totais (Mês)", value=15000.0, step=500.0)
-time_produtivo = st.sidebar.number_input("Nº de Pessoas (Mão de Obra Direta)", value=2, min_value=1)
-horas_p_pessoa = st.sidebar.number_input("Horas Contratuais/Mês", value=160, step=10)
+with st.sidebar:
+    st.header("🏢 1. Estrutura de Custos")
+    fixas_total = st.number_input("Despesas Fixas Mensais (R$)", value=15000.0, step=500.0)
+    qtd_pessoas = st.number_input("Nº de Colaboradores Diretos", value=2, min_value=1)
+    horas_mes = st.number_input("Horas Contratuais/Mês", value=160)
+    
+    st.header("📈 2. Premissas de Venda")
+    margem_alvo = st.slider("Margem de Lucro Desejada (%)", 5, 80, 40)
+    impostos = st.number_input("Impostos e Taxas (%)", value=10.0)
+    comissao = st.number_input("Comissões de Venda (%)", value=5.0)
+    
+    st.header("💰 3. Fluxo de Caixa")
+    caixa_atual = st.number_input("Saldo em Caixa (R$)", value=50000.0)
+    churn_rate = st.slider("Churn Rate Mensal (%)", 0.0, 20.0, 5.0)
 
-st.sidebar.header("💰 Estratégia Comercial")
-margem_desejada = st.sidebar.slider("Margem de Lucro Alvo (%)", 10, 80, 40)
-taxa_imposto = st.sidebar.number_input("Impostos (%)", value=10.0)
+# ==========================================
+# 4. PROCESSAMENTO DOS DADOS
+# ==========================================
 
-# Cálculo em tempo real
-dados_preco = engine_precificacao_delta(
-    custos_fixos_mensais, time_produtivo, horas_p_pessoa, margem_desejada, impostos=taxa_imposto
-)
+# Cálculo de Capacidade (85% de eficiência conforme CAPACIDADE PRODUTIVA.csv)
+capacidade_real = (qtd_pessoas * horas_mes) * 0.85
+custo_hora_tecnico = fixas_total / capacidade_real
 
-# =========================
-# DASHBOARD DE RESULTADOS
-# =========================
+# Cálculo de Preço via Markup
+markup = calcular_markup_multiplicador(impostos, comissao, margem_alvo)
+preco_sugerido_hora = custo_hora_tecnico * markup
+
+# ==========================================
+# 5. DASHBOARD PRINCIPAL (MÉTRICAS)
+# ==========================================
 c1, c2, c3, c4 = st.columns(4)
-
 with c1:
-    st.metric("Custo Hora (Real)", brl(dados_preco["custo_hora"]))
-    st.caption("Considerando 85% de produtividade")
-
+    st.metric("Custo Hora Real", brl(custo_hora_tecnico))
+    st.caption("Base: 85% Produtividade")
 with c2:
-    st.metric("Mark Up Multiplicador", f"{dados_preco['markup']:.2f}x")
-    st.caption("Proteção de margem aplicada")
-
+    st.metric("Markup Aplicado", f"{markup:.2f}x")
+    st.caption("Fórmula: 100 / (100 - x)")
 with c3:
-    st.metric("Preço de Venda (Sugestão/h)", brl(dados_preco["preco_venda_hora"]))
-    st.info("Preço ideal para bater a meta")
-
+    st.metric("Preço de Venda/h", brl(preco_sugerido_hora))
+    st.success("Preço Mínimo Sugerido")
 with c4:
-    # Simulação de Ponto de Equilíbrio (Break-even em horas)
-    be_horas = custos_fixos_mensais / (dados_preco["preco_venda_hora"] * 0.8) # 80% margem contrib.
-    st.metric("Ponto Equilíbrio (Horas)", f"{int(be_horas)}h")
+    # Break-even em horas
+    horas_ponto_equilibrio = fixas_total / (preco_sugerido_hora - (preco_sugerido_hora * (impostos+comissao)/100))
+    st.metric("Break-even (Horas)", f"{int(horas_ponto_equilibrio)}h")
 
 st.markdown("---")
 
-# =========================
-# SIMULAÇÃO DE CENÁRIOS E RUNWAY
-# =========================
-st.subheader("📉 Projeção de Runway e Fluxo de Caixa")
+# ==========================================
+# 6. SIMULADOR DE VENDAS E PRAZOS
+# ==========================================
+st.subheader("🛒 Simulador de Negociação e Parcelamento")
+col_v, col_p = st.columns(2)
 
-col_input, col_chart = st.columns([1, 2])
+with col_v:
+    horas_projeto = st.number_input("Horas Estimadas para o Projeto/Serviço", value=40)
+    valor_total_avista = horas_projeto * preco_sugerido_hora
+    st.write(f"**Valor Total à Vista:** {brl(valor_total_avista)}")
 
-with col_input:
-    caixa_inicial = st.number_input("Caixa Atual (R$)", value=50000.0)
-    vendas_estimadas_h = st.slider("Horas Vendidas/Mês", 10, int(dados_preco["capacidade_real"]), 80)
+with col_p:
+    n_parcelas = st.select_slider("Parcelamento (Meses)", options=[1, 2, 3, 6, 10, 12, 24])
+    # Juros de 1.23% extraído do arquivo 'CÁLCULO PREÇO À PRAZO.csv'
+    valor_total_prazo = calcular_venda_prazo(valor_total_avista, n_parcelas, 0.0123)
+    st.write(f"**Valor Total a Prazo:** {brl(valor_total_prazo)}")
+    st.write(f"**Parcelas de:** {brl(valor_total_prazo/n_parcelas)}")
+
+st.markdown("---")
+
+# ==========================================
+# 7. PROJEÇÃO DE 12 MESES (DRE + CAIXA)
+# ==========================================
+st.subheader("📅 Projeção de Performance (Próximos 12 meses)")
+
+vendas_h_mes = st.slider("Expectativa de Vendas Mensais (Horas)", 10, int(capacidade_real), int(capacidade_real*0.6))
+
+lista_meses = []
+caixa_acumulado = caixa_atual
+receita_total = vendas_h_mes * preco_sugerido_hora
+
+for i in range(1, 13):
+    # Aplicação de Churn na receita a partir do mês 2
+    receita_ajustada = receita_total * ((1 - churn_rate/100)**(i-1))
+    impostos_pagos = receita_ajustada * (impostos/100)
+    comissoes_pagas = receita_ajustada * (comissao/100)
     
-    # Cálculo de Receita e Burn
-    receita_mensal = vendas_estimadas_h * dados_preco["preco_venda_hora"]
-    burn_mensal = custos_fixos_mensais - (receita_mensal * 0.7) # simplificado: custos variáveis ~30%
+    margem_contribuicao = receita_ajustada - impostos_pagos - comissoes_pagas
+    resultado_mes = margem_contribuicao - fixas_total
+    caixa_acumulado += resultado_mes
     
-    if burn_mensal > 0:
-        runway = caixa_inicial / burn_mensal
-        st.error(f"⚠️ Runway Estimado: {runway:.1f} meses")
+    lista_meses.append({
+        "Mês": f"Mês {i}",
+        "Receita Bruta": receita_ajustada,
+        "Custos/Impostos": impostos_pagos + comissoes_pagas,
+        "Resultado Líquido": resultado_mes,
+        "Saldo em Caixa": max(caixa_acumulado, 0)
+    })
+
+df_projeção = pd.DataFrame(lista_meses)
+
+tab1, tab2 = st.tabs(["📊 Gráfico de Caixa", "📋 Tabela DRE Simplificada"])
+
+with tab1:
+    st.area_chart(df_projeção.set_index("Mês")["Saldo em Caixa"])
+    if caixa_acumulado < 0:
+        st.error(f"⚠️ Alerta: O caixa zera no {df_projeção[df_projeção['Saldo em Caixa'] <= 0]['Mês'].iloc[0]}")
     else:
-        st.success("✅ Operação Lucrativa (Cash Flow Positive)")
+        runway = "Infinito" if resultado_mes > 0 else f"{caixa_acumulado/abs(resultado_mes):.1f} meses"
+        st.success(f"✅ Runway estimado: {runway}")
 
-with col_chart:
-    # Criando gráfico de evolução de caixa para 12 meses
-    meses = [f"Mês {i}" for i in range(1, 13)]
-    caixa_evolucao = []
-    caixa_temp = caixa_inicial
-    for m in meses:
-        caixa_temp -= burn_mensal
-        caixa_evolucao.append(max(caixa_temp, 0))
-    
-    df_projeção = pd.DataFrame({"Mês": meses, "Saldo em Caixa": caixa_evolucao})
-    st.area_chart(df_projeção.set_index("Mês"))
+with tab2:
+    st.dataframe(df_projeção.style.format({
+        "Receita Bruta": brl, "Custos/Impostos": brl, 
+        "Resultado Líquido": brl, "Saldo em Caixa": brl
+    }), use_container_width=True)
 
-# =========================
-# RELATÓRIO COPIÁVEL
-# =========================
-with st.expander("📝 Gerar Relatório de Precificação para Sócios"):
-    report = f"""
-    ESTRATÉGIA DE PRECIFICAÇÃO FINANCE OPS:
-    --------------------------------------
-    1. CUSTO ESTRUTURAL: {brl(custos_fixos_mensais)}
-    2. CAPACIDADE REAL: {dados_preco['capacidade_real']:.1f} horas/mês
-    3. CUSTO HORA TÉCNICO: {brl(dados_preco['custo_hora'])}
-    4. MARKUP MULTIPLICADOR: {dados_preco['markup']:.2f}x
+# ==========================================
+# 8. EXPORTAÇÃO (RELATÓRIO)
+# ==========================================
+st.markdown("---")
+if st.button("📄 Gerar Relatório Executivo"):
+    relatorio = f"""
+    --- RELATÓRIO DE VIABILIDADE FINANCEIRA ---
+    Data: {datetime.now().strftime('%d/%m/%Y')}
     
-    RESULTADO:
-    - Preço Sugerido: {brl(dados_preco['preco_venda_hora'])} /hora
-    - Margem Líquida Prevista: {margem_desejada}%
-    - Break-even: Vender {int(be_horas)} horas/mês.
+    1. PRECIFICAÇÃO:
+       - Custo Hora: {brl(custo_hora_tecnico)}
+       - Markup: {markup:.2f}x
+       - Preço de Venda/h: {brl(preco_sugerido_hora)}
+       
+    2. OPERAÇÃO:
+       - Break-even: {int(horas_ponto_equilibrio)} horas/mês
+       - Capacidade Real: {capacidade_real} horas/mês
+       
+    3. PROJEÇÃO:
+       - Receita Mensal Esperada: {brl(receita_total)}
+       - Burn Rate (se houver): {brl(min(0, resultado_mes))}
+       - Status de Caixa: {'Lucrativo' if resultado_mes > 0 else 'Em queima de caixa'}
+    -------------------------------------------
     """
-    st.code(report, language="text")
+    st.code(relatorio, language="text")
